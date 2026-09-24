@@ -1,0 +1,14 @@
+.[service]
+pytest
+jsonpickle
+python-on-whales
+scikit-learn
+ollama
+openai
+git+https://github.com/leolani/emissor.git@ref_scenarios
+cltl.combot[external] @ git+https://github.com/leolani/cltl-combot.git@ref_scenarios
+cltl.backend[impl] @ git+https://github.com/leolani/cltl-backend.git@ref_scenarios
+requests
+kombu
+Pillow>=10
+opencv-python>=4.8
