@@ -16,14 +16,14 @@ setup(
     # without either one shadowing the other. See docs/component.md.
     packages=find_namespace_packages(include=['cltl.*'], where='src'),
     data_files=[('VERSION', ['VERSION'])],
-    url="https://github.com/leolani/cltl-object-recognition",
+    url="https://github.com/leolani/cltl-custtom-object-recognition",
     license='MIT License',
-    author='Your organisation',
-    author_email='you@example.org',
-    description='Template module for attaching custom processing to a Leolani deployment',
+    author='Vrije Universiteit Amsterdam',
+    author_email='piek.vossen@vu.nl',
+    description='Module for attaching object recognition processing to a Leolani deployment',
     long_description=long_description,
     long_description_content_type="text/markdown",
-    python_requires='>=3.7',
+    python_requires='>=3.10',
     # Deliberately unpinned, following every other component in this platform:
     # resolution is entirely positional against whatever sdist currently sits in
     # cltl-requirements/leolani/, selected by `--pre --upgrade --upgrade-strategy

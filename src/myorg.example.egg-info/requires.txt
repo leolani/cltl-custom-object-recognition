@@ -1,0 +1,8 @@
+cltl.combot
+emissor
+cltl.backend[impl]
+
+[service]
+cltl.combot[external]
+flask
+werkzeug
