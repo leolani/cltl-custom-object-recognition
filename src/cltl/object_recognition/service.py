@@ -7,9 +7,7 @@ from cltl.combot.infra.config import ConfigurationManager
 from cltl.combot.infra.event import Event, EventBus
 from cltl.combot.infra.resource import ResourceManager
 from cltl.combot.infra.topic_worker import TopicWorker
-from cltl.combot.event.emissor import ImageSignalEvent, TextSignalEvent
-from cltl.object_recognition.visualresponder import VisualResponder
-
+from cltl.combot.event.emissor import ImageSignalEvent
 from cltl.object_recognition.api import ObjectDetector
 from cltl.object_recognition.schema import ObjectRecognitionEvent
 
@@ -37,7 +35,6 @@ class ObjectRecognitionService:
                  event_bus: EventBus, resource_manager: ResourceManager):
         self._object_detector = object_detector
         self._image_loader = image_loader
-
         self._event_bus = event_bus
         self._resource_manager = resource_manager
 
@@ -72,13 +69,3 @@ class ObjectRecognitionService:
 
         object_event = ObjectRecognitionEvent.create_obj_rec_event(event.payload.signal, objects, bounds)
         self._event_bus.publish(self._output_topic, Event.for_payload(object_event))
-
-    def _process_visual_response(self, event: Event[TextSignalEvent]):
-        response = self._responder.respond(event.payload.signal.text, self._context)
-        if response:
-            about_event = self._create_payload(response)
-            self._event_bus.publish(self._response_topic, Event.for_payload(about_event))
-            logger.debug("Answered %s with %s", event.payload.signal.text, response)
-        elif self._forward_topic:
-            self._event_bus.publish(self._forward_topic, event)
-            logger.debug("Forwarded %s to topic %s", event.payload.signal.text, self._forward_topic)
