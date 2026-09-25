@@ -9,6 +9,7 @@ from cltl.combot.infra.time_util import timestamp_now
 from cltl.combot.infra.topic_worker import TopicWorker
 from emissor.representation.scenario import TextSignal
 from cltl.visual_responder.api import VisualResponder
+from cltl.combot.infra.event.util import extract_scenario_id
 
 logger = logging.getLogger(__name__)
 
@@ -23,26 +24,19 @@ class VisualResponderService:
         config = config_manager.get_config("cltl.visual-responder")
 
         return cls(config.get("topic_scenario"), config.get("topic_input"),
-                   config.get("topic_response"), config.get("topic_forward"),
-                   responder, config.get("intentions", multi=True), config.get("topic_intentions"),
+                   config.get("topic_output"),
+                   responder,
                    event_bus, resource_manager)
 
-    def __init__(self, scenario_topic: str, input_topic: str, response_topic: str, forward_topic: str,
+    def __init__(self, scenario_topic: str, input_topic: str, output_topic: str,
                  responder: VisualResponder,
-                 intentions: List[str], intention_topic: str,
                  event_bus: EventBus, resource_manager: ResourceManager):
         self._responder = responder
-
         self._event_bus = event_bus
         self._resource_manager = resource_manager
-
         self._scenario_topic = scenario_topic
         self._input_topic = input_topic
-        self._response_topic = response_topic
-        self._forward_topic = forward_topic
-
-        self._intentions = intentions if intentions else ()
-        self._intention_topic = intention_topic if intention_topic else None
+        self._output_topic = output_topic
 
         self._topic_worker = None
 
@@ -87,17 +81,17 @@ class VisualResponderService:
             raise ValueError("Unexpected event type " + event.payload.type)
 
     def _process_text(self, event: Event[TextSignalEvent]):
+        scenario_id = extract_scenario_id(event)
         response = self._responder.respond(event.payload.signal.text, self._context)
         if response:
-            about_event = self._create_payload(response)
-            self._event_bus.publish(self._response_topic, Event.for_payload(about_event))
-            logger.debug("Answered %s with %s", event.payload.signal.text, response)
-        elif self._forward_topic:
-            self._event_bus.publish(self._forward_topic, event)
-            logger.debug("Forwarded %s to topic %s", event.payload.signal.text, self._forward_topic)
+            about_event = self._create_payload(response, scenario_id)
+            self._event_bus.publish(self._output_topic, Event.for_payload(about_event))
+            logger.info("Visual responder answered %s with %s", event.payload.signal.text, response)
 
-    def _create_payload(self, response):
-        scenario_id = self._emissor_client.get_current_scenario_id()
+
+    def _create_payload(self, response, scenario_id):
         signal = TextSignal.for_scenario(scenario_id, timestamp_now(), timestamp_now(), None, response)
-
+        # for_agent, not for_speaker: annotates the signal as coming from the
+        # agent, which is what puts the reply on the agent's side of the chat.
         return TextSignalEvent.for_agent(signal)
+
