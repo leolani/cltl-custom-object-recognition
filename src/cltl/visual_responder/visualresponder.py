@@ -64,58 +64,13 @@ class VisualResponderImpl(VisualResponder):
         self.started = False
 
     # TODO use the confidence scores from the return in the output
-    def respond(self, statement: str, scenario_context: LeolaniContext) -> str:
-        # if not scenario_context:
-        #     return
-
-        logger.info("Visual responder checking out:", statement, scenario_context)
-        object_counts = Counter(scenario_context.objects)
-        friends = [agent.name for agent in scenario_context.persons if agent.name]
-        unrecognized = len(set([agent.uri for agent in scenario_context.persons if not agent.name]))
-        strangers = max(unrecognized, object_counts['person'] - len(friends)) if 'person' in object_counts else unrecognized
-
-        if object_counts:
-            counts = ', '.join([f"{count} {label}" for label, count in object_counts.items()])
+    def respond(self, statement: str, context: dict) -> str:
+        logger.info("Visual responder checking out:", statement, context)
+        if context:
+            counts = ', '.join([f"{count} {label}" for label, count in context.items()])
             return f"{choice(self.I_SAW)} {counts}"
         else:
             return choice(self.NO_OBJECT)
-        #
-        # # Enumerate Currently Visible Objects
-        # if any(question in statement.lower() for question in self.SEE_OBJECT):
-        #     if object_counts:
-        #         counts = ', '.join([f"{count} {label}" for label, count in object_counts.items()])
-        #         return f"{choice(self.I_SAW)} {counts}"
-        #     else:
-        #         return choice(self.NO_OBJECT)
-        #
-        # # Enumerate Currently Visible People
-        # elif any(question in statement.lower() for question in self.SEE_PERSON_ALL):
-        #     if friends or strangers:
-        #         people = ", ".join(friends)
-        #         people += " and " if (people and strangers) else ""
-        #         people += (str(strangers) + " " + choice(self.STRANGERS)) if strangers else ""
-        #
-        #         return f"{choice(self.I_SAW)} {people}"
-        #     else:
-        #         return choice(self.NO_PEOPLE)
-        # elif any(cue in statement.lower() for cue in self.SEE_SPECIFIC):
-        #     for obj in scenario_context.objects:
-        #         if obj in statement.lower():
-        #             return f"Yes, {choice(self.I_SAW)} {obj}"
-        #
-        #     return f"I cannot see a {statement.strip().split(' ')[-1]}"
-        # else:
-        #     return None
-
-        # Respond to Individual Object Queries
-#        else:
-#            for cue in self.SEE_SPECIFIC:
-#                if cue in utterance.transcript.lower():
-#                    for obj in utterance.context.objects:
-#                        if obj.name.lower() in utterance.transcript.lower():
-#                            return 1.0, lambda: self._point_to_objects(app, obj)
-#
-#                    return 1.0, lambda: app.say("I cannot see {}".format(self._insert_a_an(utterance.tokens[-1])))
 
 #    def _point_to_objects(self, app, obj):
 #        app.say("I can see {}".format(self._insert_a_an(obj.name)))
