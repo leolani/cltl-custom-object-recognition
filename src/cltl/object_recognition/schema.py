@@ -1,3 +1,4 @@
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Iterable
@@ -9,6 +10,7 @@ from emissor.representation.scenario import Mention, ImageSignal, Annotation, mo
 
 from cltl.object_recognition.api import Object
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ObjectRecognitionEvent(AnnotationEvent[Annotation[Object]]):
@@ -31,7 +33,13 @@ class ObjectRecognitionEvent(AnnotationEvent[Annotation[Object]]):
         segment = image_signal.ruler
         if bounds:
             clipped = Bounds.from_diagonal(*segment.bounds).intersection(bounds)
-            segment = segment.get_area_bounding_box(clipped.x0, clipped.y0, clipped.x1, clipped.y1)
+            if clipped:
+                segment = segment.get_area_bounding_box(clipped.x0, clipped.y0, clipped.x1, clipped.y1)
+            else:
+                # The signal's bounds don't match the image's pixel size (e.g. the
+                # backend's (-1, -1) fallback), so annotate the whole image instead.
+                logger.warning("Object bounds %s outside image signal bounds %s, annotating whole image",
+                               bounds, segment.bounds)
 
         annotation = Annotation(class_type(object), object, module_source(__name__), timestamp_now())
 

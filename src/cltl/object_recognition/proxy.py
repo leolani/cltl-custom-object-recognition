@@ -74,7 +74,9 @@ class ObjectDetectorProxy(ObjectDetector):
         if not is_success:
             raise ValueError("Could not encode image")
 
-        return buffer
+        # Send plain bytes, not the numpy buffer: a jsonpickled numpy 2 array
+        # references numpy._core, which the server's numpy 1.x cannot restore.
+        return buffer.tobytes()
 
     def _detect_objects(self, image: np.ndarray) -> Tuple[ObjectInfo]:
         logger.debug(f"sending image to server...")
@@ -84,6 +86,7 @@ class ObjectDetectorProxy(ObjectDetector):
         response = requests.post(self._detector_url, json=to_send)
 
         logger.info("got %s from server in %s sec", response, time.time()-start)
+        response.raise_for_status()
 
         response = jsonpickle.decode(response.text)
         object_detection_recognition = response["yolo_results"]
