@@ -25,7 +25,7 @@ class ObjectRecognitionContainer(InfraContainer):
         if implementation != "proxy" and implementation != "vlm":
             raise ValueError("Unknown ObjectRecognition implementation: " + implementation)
 
-        logger.info("Starting Object Recognition", implementation)
+        logger.info("Starting Object Recognition: %s", implementation)
 
         if implementation=="proxy":
              ### needed for Yolo docker service

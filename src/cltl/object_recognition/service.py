@@ -5,6 +5,7 @@ from cltl.backend.source.client_source import ClientImageSource
 from cltl.backend.spi.image import ImageSource
 from cltl.combot.infra.config import ConfigurationManager
 from cltl.combot.infra.event import Event, EventBus
+from cltl.combot.infra.event.util import extract_scenario_id
 from cltl.combot.infra.resource import ResourceManager
 from cltl.combot.infra.topic_worker import TopicWorker
 from cltl.combot.event.emissor import ImageSignalEvent
@@ -68,4 +69,6 @@ class ObjectRecognitionService:
         objects, bounds = self._object_detector.detect(image.image)
 
         object_event = ObjectRecognitionEvent.create_obj_rec_event(event.payload.signal, objects, bounds)
-        self._event_bus.publish(self._output_topic, Event.for_payload(object_event))
+        scenario_id = extract_scenario_id(event)
+        self._event_bus.publish(self._output_topic,
+                                Event.for_scenario_payload(scenario_id, object_event, source=event))
