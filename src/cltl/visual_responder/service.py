@@ -24,18 +24,17 @@ class VisualResponderService:
                     resource_manager: ResourceManager, config_manager: ConfigurationManager):
         config = config_manager.get_config("cltl.visual-responder")
 
-        return cls(config.get("topic_scenario"), config.get("text_input"),  config.get("object_input"),
+        return cls(config.get("text_input"),  config.get("object_input"),
                    config.get("topic_output"),
                    responder,
                    event_bus, resource_manager)
 
-    def __init__(self, scenario_topic: str, input_text: str, input_object: str, output_topic: str,
+    def __init__(self, input_text: str, input_object: str, output_topic: str,
                  responder: VisualResponder,
                  event_bus: EventBus, resource_manager: ResourceManager):
         self._responder = responder
         self._event_bus = event_bus
         self._resource_manager = resource_manager
-        self._scenario_topic = scenario_topic
         self._input_text = input_text
         self._input_object = input_object
         self._output_topic = output_topic
@@ -48,7 +47,7 @@ class VisualResponderService:
 
     def start(self, timeout=30):
         self._topic_worker = TopicWorker([self._input_text, self._input_object], self._event_bus, provides=[self._output_topic],
-                                         resource_manager=self._resource_manager, processor=self._process,
+                                         resource_manager=self._resource_manager, processor=self._process, buffer_size=64,
                                          name=self.__class__.__name__)
 
         # provided_topics = list(filter(None, [self._output_topic, self._forward_topic]))
@@ -66,6 +65,7 @@ class VisualResponderService:
         self._topic_worker = None
 
     def _process(self, event):
+        logger.info("VISUAL RESPONDER HERE: Should I respond to this? %s", event.metadata.topic)
         if event.metadata.topic == self._input_object:
             self._process_object(event)
         elif event.metadata.topic == self._input_text:
@@ -75,7 +75,8 @@ class VisualResponderService:
 
     def _process_text(self, event: Event[TextSignalEvent]):
         scenario_id = extract_scenario_id(event)
-        response = self._responder.respond(event.payload.signal.text, self._context[scenario_id])
+        logger.info("VISUAL RESPONDER HERE: Should I respond to this? %s, %s", event.payload.signal.text, self._context.get(scenario_id, Counter()))
+        response = self._responder.respond(event.payload.signal.text, self._context.get(scenario_id, Counter()))
         if response:
             about_event = self._create_payload(response, scenario_id)
             self._event_bus.publish(self._output_topic, Event.for_payload(about_event, source=event))
