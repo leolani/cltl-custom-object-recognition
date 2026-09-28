@@ -65,7 +65,6 @@ class VisualResponderImpl(VisualResponder):
 
     # TODO use the confidence scores from the return in the output
     def respond(self, statement: str, context: dict) -> str:
-        logger.info("Visual responder checking out:", statement, context)
         if context:
             counts = ', '.join([f"{count} {label}" for label, count in context.items()])
             return f"{choice(self.I_SAW)} {counts}"

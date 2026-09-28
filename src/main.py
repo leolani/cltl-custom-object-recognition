@@ -42,7 +42,7 @@ def deserializer(obj):
 
 class ApplicationContainer(
                            ObjectRecognitionContainer,
-                           VisualResponderContainer,
+                           #VisualResponderContainer,
                            #FaceRecognitionContainer,
                            #VectorIdContainer
                            ):
