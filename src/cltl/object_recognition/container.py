@@ -1,10 +1,10 @@
 import logging
-from sys import implementation
 
 from cltl.combot.infra.container import InfraContainer
 from cltl.combot.infra.di_container import singleton
 
 from cltl.object_recognition.api import ObjectDetector
+from cltl.object_recognition.llama_cpp import LlamaCppObjectDetectorProxy
 from cltl.object_recognition.ollama_proxy import OllamaObjectDetectorProxy
 from cltl.object_recognition.proxy import ObjectDetectorProxy
 from cltl.object_recognition.service import ObjectRecognitionService
@@ -22,7 +22,7 @@ class ObjectRecognitionContainer(InfraContainer):
              logger.warning("No ObjectDetector configured")
              return False
 
-        if implementation != "proxy" and implementation != "vlm":
+        if implementation != "proxy" and implementation != "ollama" and implementation != "llama_cpp":
             raise ValueError("Unknown ObjectRecognition implementation: " + implementation)
 
         logger.info("Starting Object Recognition: %s", implementation)
@@ -34,11 +34,14 @@ class ObjectRecognitionContainer(InfraContainer):
              detector_url = config.get("detector_url") if "detector_url" in config else None
              logger.info("Starting Object Recognition Proxy")
              return ObjectDetectorProxy(start_infra, detector_url)
-        elif implementation=="vlm":
-             config = self.config_manager.get_config("cltl.object_recognition.vlm")
+        elif implementation=="ollama":
+             config = self.config_manager.get_config("cltl.object_recognition.ollama")
              model = config.get("model")
-             logger.info("Starting Object Recognition VLM")
+             logger.info("Starting Object Recognition ollama VLM")
              return OllamaObjectDetectorProxy(model=model)
+        elif implementation=="llama_cpp":
+             logger.info("Starting Object Recognition llama_cpp VLM")
+             return LlamaCppObjectDetectorProxy.from_config(self.config_manager)
 
     @property
     @singleton
