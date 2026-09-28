@@ -8,6 +8,7 @@ import numpy as np
 from cltl.backend.api.camera import Bounds
 from ollama import Client
 
+
 from cltl.object_recognition.api import Object, ObjectDetector
 
 logger = logging.getLogger(__name__)
