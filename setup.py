@@ -7,7 +7,7 @@ with open("VERSION", "r") as fh:
     version = fh.read().strip()
 
 setup(
-    name='myorg.example',
+    name='cltl.object_recognition',
     version=version,
     package_dir={'': 'src'},
     # Only `myorg.*` — never `myorg` itself. That is what leaves `myorg` a PEP
@@ -16,7 +16,7 @@ setup(
     # without either one shadowing the other. See docs/component.md.
     packages=find_namespace_packages(include=['cltl.*'], where='src'),
     data_files=[('VERSION', ['VERSION'])],
-    url="https://github.com/leolani/cltl-custtom-object-recognition",
+    url="https://github.com/leolani/cltl-custom-object-recognition",
     license='MIT License',
     author='Vrije Universiteit Amsterdam',
     author_email='piek.vossen@vu.nl',

@@ -68,7 +68,9 @@ class ObjectRecognitionService:
             image = source.capture()
         objects, bounds = self._object_detector.detect(image.image)
 
-        object_event = ObjectRecognitionEvent.create_obj_rec_event(event.payload.signal, objects, bounds)
+        height, width = image.image.shape[:2]
+        object_event = ObjectRecognitionEvent.create_obj_rec_event(event.payload.signal, objects, bounds,
+                                                                   image_size=(width, height))
         scenario_id = extract_scenario_id(event)
         self._event_bus.publish(self._output_topic,
                                 Event.for_scenario_payload(scenario_id, object_event, source=event))

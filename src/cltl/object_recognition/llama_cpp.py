@@ -28,6 +28,10 @@ _SCENE_TYPE = SCENE_TYPE
 # downscaled before they are sent, and the number of reported objects is limited.
 _MAX_IMAGE_SIZE = 1024
 _MAX_OBJECTS = 40
+# Penalizes tokens by how often they already occurred, to keep the model from looping on the
+# same detection (e.g. dozens of identical "cup" entries). Kept low, as it also applies to the
+# JSON keys and coordinate digits that legitimately repeat in the response.
+_DEFAULT_FREQUENCY_PENALTY = 0.3
 
 _DETECTION_SCHEMA = {
     "type": "object",
@@ -105,9 +109,12 @@ class LlamaCppObjectDetectorProxy(ObjectDetector):
 
         return cls(model=config.get("model") if "model" in config else _DEFAULT_MODEL,
                    host=config.get("host") if "host" in config else _DEFAULT_HOST,
-                   api_key=config.get("api_key") if "api_key" in config else None)
+                   api_key=config.get("api_key") if "api_key" in config else None,
+                   frequency_penalty=config.get_float("frequency_penalty")
+                       if "frequency_penalty" in config else _DEFAULT_FREQUENCY_PENALTY)
 
-    def __init__(self, model: str = _DEFAULT_MODEL, host: str = _DEFAULT_HOST, api_key: str = None):
+    def __init__(self, model: str = _DEFAULT_MODEL, host: str = _DEFAULT_HOST, api_key: str = None,
+                 frequency_penalty: float = _DEFAULT_FREQUENCY_PENALTY):
         """
         Parameters
         ----------
@@ -118,9 +125,12 @@ class LlamaCppObjectDetectorProxy(ObjectDetector):
             Address of the llama-server, e.g. "http://localhost:9009".
         api_key : str
             API key, only needed if llama-server was started with --api-key.
+        frequency_penalty : float
+            Penalty on repeated tokens, to prevent the model from repeating the same detection.
         """
         self._client = OpenAI(base_url=f"{host.rstrip('/')}/v1", api_key=api_key or "no-key")
         self._model = model
+        self._frequency_penalty = frequency_penalty
 
     def detect(self, image: np.ndarray) -> Tuple[Iterable[Object], Iterable[Bounds]]:
         logger.info("Processing image %s with model %s", image.shape, self._model)
@@ -169,6 +179,7 @@ class LlamaCppObjectDetectorProxy(ObjectDetector):
                 "json_schema": {"name": "detections", "schema": _DETECTION_SCHEMA},
             },
             temperature=0.0,
+            frequency_penalty=self._frequency_penalty,
         )
 
         choice = response.choices[0]
