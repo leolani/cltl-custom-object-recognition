@@ -1,18 +1,22 @@
 from collections import Counter
 from random import choice
 import logging
-from typing import List
+import re
+from typing import List, Optional
 
 from cltl.visual_responder.api import VisualResponder, ImageAnnotation, DEFAULT_COUNT_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
 class VisualResponderImpl(VisualResponder):
+    # Cues to report what is seen, matched as whole words against the statement with
+    # apostrophes removed, see _has_cue. Statements without a cue are not responded to.
     SEE_OBJECT = [
+        "look",
         "what do you see",
         "what can you see",
         "what did you see",
-        "what have you seen"
+        "what have you seen",
     ]
 
     SEE_PERSON = [
@@ -44,7 +48,7 @@ class VisualResponderImpl(VisualResponder):
         "I think I observed"
     ]
 
-    # Matched against the statement with apostrophes removed, see _normalize
+    # Cues to report what changed, see SEE_OBJECT
     SEE_CHANGE = [
         "what changed",
         "what has changed",
@@ -56,7 +60,9 @@ class VisualResponderImpl(VisualResponder):
         "anything new",
         "anything changed",
         "any change",
+        "any changes",
         "difference",
+        "differences",
     ]
 
     NO_CHANGE = [
@@ -97,14 +103,15 @@ class VisualResponderImpl(VisualResponder):
         self.started = False
 
     # TODO use the confidence scores from the return in the output
-    def respond(self, statement: str, history: List[ImageAnnotation]) -> str:
-        if not history:
-            return choice(self.NO_OBJECT)
+    def respond(self, statement: str, history: List[ImageAnnotation]) -> Optional[str]:
+        """Returns None if the statement contains no cue to report what is seen or what changed."""
+        if self._has_cue(statement, self.SEE_CHANGE):
+            return self._describe_change(history) if history else choice(self.NO_OBJECT)
 
-        if any(clue in self._normalize(statement) for clue in self.SEE_CHANGE):
-            return self._describe_change(history)
+        if self._has_cue(statement, self.SEE_OBJECT):
+            return self._describe(history) if history else choice(self.NO_OBJECT)
 
-        return self._describe(history)
+        return None
 
     def _describe(self, history: List[ImageAnnotation]) -> str:
         """
@@ -198,6 +205,11 @@ class VisualResponderImpl(VisualResponder):
             plural = word + "s"
 
         return f"{head} {plural}" if head else plural
+
+    @staticmethod
+    def _has_cue(statement: str, cues: List[str]) -> bool:
+        normalized = VisualResponderImpl._normalize(statement)
+        return any(re.search(rf"\b{re.escape(cue)}\b", normalized) for cue in cues)
 
     @staticmethod
     def _normalize(statement: str) -> str:
