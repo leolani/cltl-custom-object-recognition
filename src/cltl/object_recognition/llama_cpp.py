@@ -9,7 +9,7 @@ import numpy as np
 from cltl.backend.api.camera import Bounds
 from openai import OpenAI
 
-from cltl.object_recognition.api import Object, ObjectDetector
+from cltl.object_recognition.api import Object, ObjectDetector, SCENE_TYPE, SCENE_DESCRIPTION_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ _DEFAULT_HOST = "http://localhost:9009"
 
 # Object.type used for the whole-image scene classification, as opposed to individual
 # object detections, which use the model name (see LlamaCppObjectDetectorProxy._to_object).
-_SCENE_TYPE = "scene"
+_SCENE_TYPE = SCENE_TYPE
 
 # The prompt and the response must fit in the context size of llama-server (-c). Image
 # tokens scale with the image size (Qwen3-VL: one token per 32x32 pixels), so images are
@@ -37,6 +37,10 @@ _DETECTION_SCHEMA = {
             "description": "A short label classifying the overall scene or place depicted in the "
                             "image, e.g. 'office', 'kitchen', 'living room', 'street', 'city', "
                             "'village', 'forest'.",
+        },
+        "scene_description": {
+            "type": "string",
+            "description": "One sentence describing what is going on in the image.",
         },
         "objects": {
             "type": "array",
@@ -57,13 +61,14 @@ _DETECTION_SCHEMA = {
             "maxItems": _MAX_OBJECTS,
         }
     },
-    "required": ["scene", "objects"],
+    "required": ["scene", "scene_description", "objects"],
 }
 
 _PROMPT = (
     "Analyze this image. First classify the overall scene or place it depicts with a short "
     "label, e.g. \"office\", \"kitchen\", \"living room\", \"street\", \"city\", \"village\", "
     "\"forest\", and report it as \"scene\". "
+    "Describe in one sentence what is going on in the image and report it as \"scene_description\". "
     "Then detect every distinct object in the image. For each object report its label "
     "and a bounding box as \"bbox_2d\": [xmin, ymin, xmax, ymax], with coordinates "
     "normalized to the range 0-1000 relative to the image height and width. "
@@ -90,7 +95,8 @@ class LlamaCppObjectDetectorProxy(ObjectDetector):
 
     In addition to individual objects, the model is asked to classify the overall
     scene depicted (e.g. "office", "kitchen", "street"). This is returned as an
-    additional Object with type _SCENE_TYPE, whose Bounds cover the complete image.
+    additional Object with type SCENE_TYPE, whose Bounds cover the complete image. A one
+    sentence description of the image is returned likewise with type SCENE_DESCRIPTION_TYPE.
     """
 
     @classmethod
@@ -130,6 +136,11 @@ class LlamaCppObjectDetectorProxy(ObjectDetector):
             objects.append(Object(_SCENE_TYPE, scene, None))
             bounds.append(Bounds(0, width, 0, height))
 
+        scene_description = result.get("scene_description")
+        if scene_description:
+            objects.append(Object(SCENE_DESCRIPTION_TYPE, scene_description, None))
+            bounds.append(Bounds(0, width, 0, height))
+
         for detection in result.get("objects", ()):
             parsed = self._to_object(detection, width, height)
             if parsed is None:
@@ -138,7 +149,7 @@ class LlamaCppObjectDetectorProxy(ObjectDetector):
             objects.append(obj)
             bounds.append(bound)
 
-        logger.info("Detected scene '%s' and objects: %s", scene, [obj.label for obj in objects if obj.type != _SCENE_TYPE])
+        logger.info("Detected scene '%s' and objects: %s", scene, [obj.label for obj in objects if obj.type not in (SCENE_TYPE, SCENE_DESCRIPTION_TYPE)])
 
         return tuple(objects), tuple(bounds)
 
@@ -253,6 +264,9 @@ def main():
             print(f"Scene: {obj.label}")
             cv2.putText(image, f"scene: {obj.label}", (10, 20),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            continue
+        if obj.type == SCENE_DESCRIPTION_TYPE:
+            print(f"Description: {obj.label}")
             continue
 
         found_objects = True

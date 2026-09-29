@@ -1,7 +1,7 @@
 import logging
-from typing import List
+from collections import Counter, deque
+from typing import Deque, Dict
 
-from collections import Counter
 from cltl.combot.event.emissor import TextSignalEvent
 from cltl.combot.infra.config import ConfigurationManager
 from cltl.combot.infra.event import Event, EventBus
@@ -9,13 +9,16 @@ from cltl.combot.infra.resource import ResourceManager
 from cltl.combot.infra.time_util import timestamp_now
 from cltl.combot.infra.topic_worker import TopicWorker
 from emissor.representation.scenario import TextSignal, class_type
-from cltl.visual_responder.api import VisualResponder
+from cltl.visual_responder.api import VisualResponder, ImageAnnotation, DEFAULT_COUNT_THRESHOLD
 from cltl.combot.infra.event.util import extract_scenario_id
-from cltl.object_recognition.api import Object
+from cltl.object_recognition.api import Object, SCENE_TYPE, SCENE_DESCRIPTION_TYPE
 logger = logging.getLogger(__name__)
 
 
 CONTENT_TYPE_SEPARATOR = ';'
+
+# Default number of image annotations that reflect a change kept per scenario
+DEFAULT_HISTORY_SIZE = 5
 
 
 class VisualResponderService:
@@ -27,19 +30,27 @@ class VisualResponderService:
         return cls(config.get("text_input"),  config.get("object_input"),
                    config.get("topic_output"),
                    responder,
-                   event_bus, resource_manager)
+                   event_bus, resource_manager,
+                   count_threshold=int(config.get("count_threshold")) if "count_threshold" in config
+                                   else DEFAULT_COUNT_THRESHOLD,
+                   history_size=int(config.get("history_size")) if "history_size" in config
+                                else DEFAULT_HISTORY_SIZE)
 
     def __init__(self, input_text: str, input_object: str, output_topic: str,
                  responder: VisualResponder,
-                 event_bus: EventBus, resource_manager: ResourceManager):
+                 event_bus: EventBus, resource_manager: ResourceManager,
+                 count_threshold: int = DEFAULT_COUNT_THRESHOLD, history_size: int = DEFAULT_HISTORY_SIZE):
         self._responder = responder
         self._event_bus = event_bus
         self._resource_manager = resource_manager
         self._input_text = input_text
         self._input_object = input_object
         self._output_topic = output_topic
+        self._count_threshold = count_threshold
+        self._history_size = history_size
         self._topic_worker = None
-        self._context = {}
+        # Per scenario the last history_size image annotations that differ from their predecessor, oldest first
+        self._context: Dict[str, Deque[ImageAnnotation]] = {}
 
     @property
     def app(self):
@@ -75,8 +86,9 @@ class VisualResponderService:
 
     def _process_text(self, event: Event[TextSignalEvent]):
         scenario_id = extract_scenario_id(event)
-        logger.info("VISUAL RESPONDER HERE: Should I respond to this? %s, %s", event.payload.signal.text, self._context.get(scenario_id, Counter()))
-        response = self._responder.respond(event.payload.signal.text, self._context.get(scenario_id, Counter()))
+        history = list(self._context.get(scenario_id, ()))
+        logger.info("VISUAL RESPONDER HERE: Should I respond to this? %s, %s", event.payload.signal.text, history)
+        response = self._responder.respond(event.payload.signal.text, history)
         if response:
             about_event = self._create_payload(response, scenario_id)
             self._event_bus.publish(self._output_topic, Event.for_payload(about_event, source=event))
@@ -84,11 +96,26 @@ class VisualResponderService:
 
     def _process_object(self, event: Event[TextSignalEvent]):
         scenario_id = extract_scenario_id(event)
-        object_labels = [annotation.value.label
-                         for mention in event.payload.mentions
-                         for annotation in mention.annotations
-                         if annotation.type == class_type(Object) and annotation.value]
-        self._context[scenario_id] = Counter(object_labels)
+        annotation = self._to_image_annotation(event)
+
+        history = self._context.setdefault(scenario_id, deque(maxlen=self._history_size))
+        if annotation.is_change_from(history, self._count_threshold):
+            # With maxlen, appending to a full deque drops the oldest annotation
+            history.append(annotation)
+            logger.info("Image changed for scenario %s: %s", scenario_id, annotation)
+
+    @staticmethod
+    def _to_image_annotation(event) -> ImageAnnotation:
+        objects = [annotation.value
+                   for mention in event.payload.mentions
+                   for annotation in mention.annotations
+                   if annotation.type == class_type(Object) and annotation.value]
+
+        scene = next((obj.label for obj in objects if obj.type == SCENE_TYPE), None)
+        scene_description = next((obj.label for obj in objects if obj.type == SCENE_DESCRIPTION_TYPE), None)
+        labels = Counter(obj.label for obj in objects if obj.type not in (SCENE_TYPE, SCENE_DESCRIPTION_TYPE))
+
+        return ImageAnnotation(scene, scene_description, labels)
 
     def _create_payload(self, response, scenario_id):
         signal = TextSignal.for_scenario(scenario_id, timestamp_now(), timestamp_now(), None, response)

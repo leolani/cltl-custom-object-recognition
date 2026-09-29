@@ -18,6 +18,12 @@ class Object:
     confidence: Optional[float]
 
 
+# Object.type of the whole-image scene classification and scene description, as opposed to
+# individual object detections, which use the name of the detection model as type.
+SCENE_TYPE = "scene"
+SCENE_DESCRIPTION_TYPE = "scene_description"
+
+
 class ObjectDetector(abc.ABC):
     """
     Detect objects in an image.

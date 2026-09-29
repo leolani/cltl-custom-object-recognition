@@ -1,11 +1,11 @@
 from collections import Counter
 from random import choice
 import logging
+from typing import List
 
-from cltl.combot.event.emissor import LeolaniContext
+from cltl.visual_responder.api import VisualResponder, ImageAnnotation, DEFAULT_COUNT_THRESHOLD
 
 logger = logging.getLogger(__name__)
-from cltl.visual_responder.api import VisualResponder
 
 class VisualResponderImpl(VisualResponder):
     SEE_OBJECT = [
@@ -44,6 +44,38 @@ class VisualResponderImpl(VisualResponder):
         "I think I observed"
     ]
 
+    # Matched against the statement with apostrophes removed, see _normalize
+    SEE_CHANGE = [
+        "what changed",
+        "what has changed",
+        "whats changed",
+        "what is different",
+        "whats different",
+        "what is new",
+        "whats new",
+        "anything new",
+        "anything changed",
+        "any change",
+        "difference",
+    ]
+
+    NO_CHANGE = [
+        "Nothing has changed since I started looking",
+        "Everything still looks the same to me",
+    ]
+
+    # When the changes in the most recent image were already reported
+    NO_UPDATE = [
+        "Nothing has changed since I last told you",
+        "I haven't noticed any change since then",
+    ]
+
+    # When the only changes are objects that were seen before
+    NOTHING_NEW = [
+        "I don't see anything new",
+        "Nothing new, just things I have seen before",
+    ]
+
     NO_OBJECT = [
         "I don't see anything",
         "I don't see any object",
@@ -60,16 +92,122 @@ class VisualResponderImpl(VisualResponder):
         "strangers"
     ]
 
-    def __init__(self):
+    def __init__(self, count_threshold: int = DEFAULT_COUNT_THRESHOLD):
+        self._count_threshold = count_threshold
         self.started = False
 
     # TODO use the confidence scores from the return in the output
-    def respond(self, statement: str, context: dict) -> str:
-        if context:
-            counts = ', '.join([f"{count} {label}" for label, count in context.items()])
-            return f"{choice(self.I_SAW)} {counts}"
-        else:
+    def respond(self, statement: str, history: List[ImageAnnotation]) -> str:
+        if not history:
             return choice(self.NO_OBJECT)
+
+        if any(clue in self._normalize(statement) for clue in self.SEE_CHANGE):
+            return self._describe_change(history)
+
+        return self._describe(history)
+
+    def _describe(self, history: List[ImageAnnotation]) -> str:
+        """
+        Describes the most recent annotation, with the object counts if it changed from the
+        previous one, otherwise with the scene description.
+        """
+        annotation = history[-1]
+        sentences = []
+        if annotation.scene:
+            sentences.append(f"This looks like {self._insert_a_an(annotation.scene)}.")
+
+        if annotation.scene_description and not self._has_changed(history):
+            sentences.append(annotation.scene_description)
+        elif annotation.objects:
+            sentences.append(f"{choice(self.I_SEE)} {self._counts(annotation.objects)}.")
+        else:
+            sentences.append(f"{choice(self.NO_OBJECT)}.")
+
+        return " ".join(sentences)
+
+    def _has_changed(self, history: List[ImageAnnotation]) -> bool:
+        if len(history) < 2:
+            return False
+
+        *older, previous, last = history
+        appeared, disappeared = last.object_changes([*older, previous], self._count_threshold)
+
+        return last.scene != previous.scene or bool(appeared or disappeared)
+
+    def _describe_change(self, history: List[ImageAnnotation]) -> str:
+        if history[-1].reported:
+            return choice(self.NO_UPDATE)
+
+        history[-1].reported = True
+        if len(history) < 2:
+            return choice(self.NO_CHANGE)
+
+        *older, previous, last = history
+        sentences = []
+        if last.scene != previous.scene:
+            sentences.append(f"The scene changed from {previous.scene or 'unknown'} to {last.scene or 'unknown'}.")
+
+        appeared, disappeared = last.object_changes([*older, previous], self._count_threshold)
+        if appeared:
+            sentences.append(f"Now I also see {self._counts(appeared)}.")
+        if disappeared:
+            sentences.append(f"I no longer see {self._counts(disappeared)}.")
+
+        return " ".join(sentences) if sentences else choice(self.NOTHING_NEW)
+
+    @staticmethod
+    def _counts(objects: Counter) -> str:
+        return ', '.join(f"{count} {VisualResponderImpl._plural(label)}" if count > 1
+                         else VisualResponderImpl._insert_a_an(label)
+                         for label, count in objects.most_common())
+
+    IRREGULAR_PLURALS = {
+        "man": "men",
+        "woman": "women",
+        "person": "people",
+        "child": "children",
+        "foot": "feet",
+        "tooth": "teeth",
+        "mouse": "mice",
+        "goose": "geese",
+        "knife": "knives",
+        "leaf": "leaves",
+        "shelf": "shelves",
+        "sheep": "sheep",
+        "fish": "fish",
+        "deer": "deer",
+    }
+
+    @staticmethod
+    def _plural(label: str) -> str:
+        # Only the last word is inflected, e.g. "coffee cup" -> "coffee cups"
+        head, _, word = label.rpartition(" ")
+        lower = word.lower()
+
+        if lower in VisualResponderImpl.IRREGULAR_PLURALS:
+            plural = VisualResponderImpl.IRREGULAR_PLURALS[lower]
+        elif lower in VisualResponderImpl.IRREGULAR_PLURALS.values() \
+                or (lower.endswith("s") and not lower.endswith(("ss", "us", "is"))):
+            # Already plural, e.g. "glasses", "slippers", "people"
+            plural = word
+        elif lower.endswith(("s", "x", "z", "ch", "sh")):
+            plural = word + "es"
+        elif lower.endswith("y") and lower[-2:-1] not in ("a", "e", "i", "o", "u"):
+            plural = word[:-1] + "ies"
+        else:
+            plural = word + "s"
+
+        return f"{head} {plural}" if head else plural
+
+    @staticmethod
+    def _normalize(statement: str) -> str:
+        # Removes straight and typographic apostrophes, so "what's", "what’s" and "whats" match alike
+        return statement.lower().replace("'", "").replace("\u2019", "").replace("\u2018", "")
+
+    @staticmethod
+    def _insert_a_an(label: str) -> str:
+        article = "an" if label[:1].lower() in "aeiou" else "a"
+        return f"{article} {label}"
 
 #    def _point_to_objects(self, app, obj):
 #        app.say("I can see {}".format(self._insert_a_an(obj.name)))
