@@ -9,8 +9,9 @@ from cltl.visual_responder.api import VisualResponder, ImageAnnotation, DEFAULT_
 logger = logging.getLogger(__name__)
 
 class VisualResponderImpl(VisualResponder):
-    # Cues to report what is seen, matched as whole words against the statement with
+    # Default cues to report what is seen, matched as whole words against the statement with
     # apostrophes removed, see _has_cue. Statements without a cue are not responded to.
+    # Can be configured with see_cues in [cltl.visual-responder].
     SEE_OBJECT = [
         "look",
         "what do you see",
@@ -48,7 +49,7 @@ class VisualResponderImpl(VisualResponder):
         "I think I observed"
     ]
 
-    # Cues to report what changed, see SEE_OBJECT
+    # Default cues to report what changed, see SEE_OBJECT. Can be configured with change_cues.
     SEE_CHANGE = [
         "what changed",
         "what has changed",
@@ -98,17 +99,21 @@ class VisualResponderImpl(VisualResponder):
         "strangers"
     ]
 
-    def __init__(self, count_threshold: int = DEFAULT_COUNT_THRESHOLD):
+    def __init__(self, count_threshold: int = DEFAULT_COUNT_THRESHOLD,
+                 see_cues: Optional[List[str]] = None, change_cues: Optional[List[str]] = None):
         self._count_threshold = count_threshold
+        # Normalized like the statement, so cues can be written with apostrophes
+        self._see_cues = [self._normalize(cue) for cue in (see_cues or self.SEE_OBJECT) if cue.strip()]
+        self._change_cues = [self._normalize(cue) for cue in (change_cues or self.SEE_CHANGE) if cue.strip()]
         self.started = False
 
     # TODO use the confidence scores from the return in the output
     def respond(self, statement: str, history: List[ImageAnnotation]) -> Optional[str]:
         """Returns None if the statement contains no cue to report what is seen or what changed."""
-        if self._has_cue(statement, self.SEE_CHANGE):
+        if self._has_cue(statement, self._change_cues):
             return self._describe_change(history) if history else choice(self.NO_OBJECT)
 
-        if self._has_cue(statement, self.SEE_OBJECT):
+        if self._has_cue(statement, self._see_cues):
             return self._describe(history) if history else choice(self.NO_OBJECT)
 
         return None
@@ -214,7 +219,7 @@ class VisualResponderImpl(VisualResponder):
     @staticmethod
     def _normalize(statement: str) -> str:
         # Removes straight and typographic apostrophes, so "what's", "what’s" and "whats" match alike
-        return statement.lower().replace("'", "").replace("\u2019", "").replace("\u2018", "")
+        return statement.strip().lower().replace("'", "").replace("\u2019", "").replace("\u2018", "")
 
     @staticmethod
     def _insert_a_an(label: str) -> str:

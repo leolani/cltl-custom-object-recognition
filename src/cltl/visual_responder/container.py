@@ -13,8 +13,11 @@ class VisualResponderContainer(InfraContainer):
     def visual_responder(self) -> VisualResponder:
         config = self.config_manager.get_config("cltl.visual-responder")
         count_threshold = int(config.get("count_threshold")) if "count_threshold" in config else DEFAULT_COUNT_THRESHOLD
+        # Comma separated lists, the defaults of VisualResponderImpl are used if not configured
+        see_cues = config.get("see_cues", multi=True) if "see_cues" in config else None
+        change_cues = config.get("change_cues", multi=True) if "change_cues" in config else None
 
-        return VisualResponderImpl(count_threshold)
+        return VisualResponderImpl(count_threshold, see_cues, change_cues)
 
     @property
     @singleton
