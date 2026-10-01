@@ -38,6 +38,6 @@ RUN pip install --no-index --no-build-isolation --find-links=/leolani -r require
 COPY config ./config
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:8006/health || exit 1
 
 CMD ["python", "src/main.py"]
