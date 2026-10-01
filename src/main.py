@@ -8,8 +8,6 @@ from cltl.combot.infra.di_container import singleton
 from cltl.combot.infra.event.api import Event, PAYLOAD
 from cltl.combot.infra.event.memory import SynchronousEventBus
 from cltl.object_recognition.container import ObjectRecognitionContainer
-from cltl.face_recognition.container import FaceRecognitionContainer
-from cltl.vector_id.container import VectorIdContainer
 from cltl.visual_responder.container import VisualResponderContainer
 from emissor.representation.util import marshal, unmarshal, register_type_var
 from flask import Flask

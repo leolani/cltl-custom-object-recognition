@@ -1,167 +1,251 @@
-# cltl-example
+# cltl-custom-object-recognition
 
-A minimal template for **attaching your own code to a running Leolani
-conversational agent**, demonstrating exactly one thing: subscribing to the
-event bus, publishing a reply, and handling a tenant id correctly. Copy this
-repository, replace one function, and your code is taking part in the
-conversation.
+Two Leolani components that give a conversational agent eyes:
 
-## What Leolani is, in one picture
+- **`cltl.object_recognition`** — listens for images on the event bus, runs an
+  object detector over them, and publishes the detected objects (label,
+  bounding box, confidence) plus a scene label and a one-sentence scene
+  description as an annotation event.
+- **`cltl.visual_responder`** — keeps a short per-scenario history of what was
+  seen, and answers questions such as *"what do you see?"* or *"what has
+  changed?"* in the chat.
 
-Leolani is a conversational agent assembled from independent processes — a chat
-UI, a speech recogniser, a dialogue engine, a memory store. None of them call
-each other. They all talk to a **message bus**, publishing events on named
-*topics* and subscribing to the topics they care about:
+Both attach to a running Leolani deployment through the message bus. Nothing
+in the platform needs to know they exist.
+
+## How it fits together
 
 ```
-                        ┌─────────────────────┐
-   you type ──────────► │      chat UI        │ ◄──── you upload a picture
-                        └────┬───────────┬────┘
-        publishes on         │           │    publishes on  cltl.topic.image
-        cltl.topic.text_in   │           │
-                        ═════▼═══════════▼═════════════════════  the bus
-                                   │ delivers to every subscriber
-                     ┌─────────────┴─────────────┐
-                     ▼                           ▼
-              ┌─────────────┐            ┌──────────────┐
-              │  cltl-eliza │            │ YOUR MODULE  │  ◄── this template
-              │  (text only)│            │ text + image │
-              └──────┬──────┘            └───────┬──────┘
-                     │   publishes on  cltl.topic.text_out
-                        ═══════════▼═══════════════════════════
-                                   │
-                        ┌──────────▼──────────┐
-   you read  ◄───────── │      chat UI        │
-                        └─────────────────────┘
+   chat UI / camera
+        │  cltl.topic.image                    cltl.topic.text_in  (user utterances)
+        ▼                                                │
+ ┌──────────────────────────┐                            │
+ │ ObjectRecognitionService │                            │
+ │  fetch image from storage│                            │
+ │  ObjectDetector.detect() │                            │
+ └────────────┬─────────────┘                            │
+              │ cltl.topic.object_recognition            │
+              ▼                                          ▼
+        ┌────────────────────────────────────────────────────┐
+        │ VisualResponderService                              │
+        │   per scenario: history of changed ImageAnnotations │
+        │   VisualResponderImpl.respond(utterance, history)   │
+        └─────────────────────────┬──────────────────────────┘
+                                  │ cltl.topic.vision_out  (agent reply)
+                                  ▼
+                               chat UI
 ```
 
-A deployment built to run this module (see the repository root's
-[`servers/` and `clients/`](../doc/DEPLOYMENT.md)) is **multi-tenant**: one
-shared platform serves several isolated groups of users, and your module
-belongs to one of them. The **only** thing keeping tenants apart is the
-routing key each side binds — `cltl.topic.text_in.tenant-a` against
-`cltl.topic.text_in.tenant-b`, while the shared `cltl-eliza` binds
-`cltl.topic.text_in.#` and hears both. See
-[`../doc/DEPLOYMENT.md#tenancy`](../doc/DEPLOYMENT.md#tenancy) for the whole
-story — this module's job is to get that one part right, nothing else.
+All topic names are configurable, see [Configuration](#configuration).
 
-The consequence that matters: **nothing in the platform needs to know your
-module exists.** You subscribe to a topic that is already being published on,
-and publish to a topic that is already being listened to. No registration, no
-plugin API, no fork of the platform.
+## Object recognition
 
-## What this template is
+`ObjectRecognitionService` (`src/cltl/object_recognition/service.py`)
+subscribes to the image topic. An image event carries no pixels, only a
+`cltl-storage:image/<id>` reference, so the service fetches the image through
+`cltl.backend`'s `ClientImageSource` (configured by `[cltl.backend]
+storage_url`). It then calls the configured `ObjectDetector` and publishes an
+`ObjectRecognitionEvent` (`schema.py`): one EMISSOR `Mention` per detection,
+whose segment is the bounding box in image pixels and whose annotation is an
+`Object(type, label, confidence)`. If nothing is detected, a single mention
+with a `None` annotation covers the whole image.
 
-A complete, working module — buildable, testable, dockerisable — wrapped
-around two deliberately silly functions, one per modality:
+### Detector implementations
 
-```python
-def process(self, text: str) -> Optional[str]:              # echo.py
-    return f"YOU SAID: {text.upper()} (via myorg.example)"
+Selected with `[cltl.object_recognition] implementation`:
 
-def describe(self, image: np.ndarray) -> Optional[str]:     # imagesize.py
-    height, width = image.shape[:2]
-    return f"The image you uploaded is {width}x{height} (via myorg.example)"
-```
+| `implementation` | Class | Backend | Scene label | Scene description |
+|---|---|---|---|---|
+| `llama_cpp` (default) | `LlamaCppObjectDetectorProxy` | A vision-language model (e.g. Qwen3-VL) served by llama.cpp's `llama-server`, via its OpenAI-compatible API | ✓ | ✓ |
+| `ollama` | `OllamaObjectDetectorProxy` | A vision-language model (e.g. `qwen2.5vl`) served by a local Ollama, or Ollama's cloud API | ✓ | – |
+| `proxy` | `ObjectDetectorProxy` | YOLOv5 in the `tae898/yolov5` Docker image (started automatically when `start_infra: True`) | – | – |
 
-Those two functions, in `src/myorg/example/echo.py` and `imagesize.py`, are
-the *only* things that are placeholder, and replacing them is the point.
-Everything around them — the event plumbing (`src/myorg/example/service.py`),
-the configuration, the tests — is real and is what handles a tenant id
-correctly:
+The VLM detectors prompt the model for structured JSON (constrained by a JSON
+schema), with boxes normalized to 0–1000, and convert the result to the same
+`Object`/`Bounds` shape the YOLO proxy produces, so they are drop-in
+replacements. The scene label and description are returned as extra `Object`s
+with type `scene` and `scene_description` (`api.SCENE_TYPE`,
+`api.SCENE_DESCRIPTION_TYPE`) whose bounds cover the whole image; individual
+detections use the model name as type.
 
-- `ExampleService.start()` warns once if the deployment's bus has no tenant
-  configured (`[cltl.event.kombu] tenant` empty), because that failure is
-  otherwise silent — see `tests/test_tenancy.py`.
-- `ExampleService._process()` warns once if an incoming *event* carries no
-  tenant, and every reply is published with `source=event` — the only thing
-  that copies a tenant (and scenario id) from an incoming event onto the
-  reply this module sends back. Dropping that is the most common way a reply
-  silently reaches nobody.
+`llama_cpp` specifics:
 
-Opening the conversation's scenario is **not** this module's job — that is
-the platform's own `cltl-context`, one instance per tenant (see
-[`../clients/context`](../clients/context)). A standalone copy of this
-template used to carry a throwaway scenario-opener for deployments that had
-none of their own; against this platform there always is one, so
-`src/main.py` composes nothing beyond the one container below.
+- Images are downscaled to at most 1024 px on the long side before sending, and
+  at most 40 objects are requested, so prompt and answer fit in the server's
+  context (`-c`). A truncated answer is logged as a warning.
+- `frequency_penalty` (default 0.3) keeps the model from repeating the same
+  detection over and over.
+- `<think>…</think>` output from reasoning models is stripped before parsing.
 
-## Three ways to run it
-
-| | You run | You get | You need |
-|---|---|---|---|
-| **Notebook** | `custom-module.ipynb` | An interactive, cell-by-cell look at subscribing and publishing on the bus | a Python 3.10 venv, `pip install -r requirements.notebook.txt jupyterlab`, and a full tenant already running (see below) |
-| **Component** | `src/main.py` | A packaged, tested, installable module, run standalone against a real deployment's broker | a Python 3.10 venv, `pip install -r requirements.txt` |
-| **Container** | `compose/example.compose.yml` | Runs inside the deployment like any platform module | `../servers/broker` (+ whichever `servers/*` the deployment needs) and one tenant's `../clients/context` already running |
-
-All three attach to an **already-running** deployment — this repository
-builds no deployment of its own. See
-[`../doc/DEPLOYMENT.md`](../doc/DEPLOYMENT.md) for bringing one up.
-
-### Notebook
-
-The notebook attaches to a tenant's **already-open** conversation — it does
-not open or close a scenario itself, since that is `../clients/context`'s
-job (see "What this template is" above). Bring up a full tenant first —
-`../servers/broker` (+ whichever `../servers/*` the deployment needs) and
-one tenant's `../clients/backend` + `../clients/context` + `../clients/chat-ui`
-— then:
+Start a server, for example:
 
 ```bash
-python3.10 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.notebook.txt jupyterlab
-python -m ipykernel install --user --name cltl-example --display-name "cltl-example (.venv)"
-
-jupyter lab custom-module.ipynb
+llama-server -m Qwen3VL-8B-Instruct-Q4_K_M.gguf \
+    --mmproj mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf \
+    -c 4092 -ngl all --host 0.0.0.0 --port 9009
 ```
 
-Pick the `cltl-example (.venv)` kernel when the notebook opens, and run the
-cells top to bottom — each one explains, in order, subscribing, publishing a
-tenant-correct reply, a second modality, and proving tenant isolation.
+### Trying a detector on a single image
 
-### Component
+Both VLM detectors have a command line entry point that prints the detections
+and writes an annotated copy of the image (`<image>.detections.png`):
+
+```bash
+python -m cltl.object_recognition.llama_cpp data/Kyoto2011.JPG --host http://localhost:9009 [--show]
+python -m cltl.object_recognition.ollama_proxy data/Kyoto2011.JPG --model qwen2.5vl [--host https://ollama.com --api-key ...]
+```
+
+## Visual responder
+
+`VisualResponderService` (`src/cltl/visual_responder/service.py`) subscribes
+to both the object recognition topic and the text input topic.
+
+**On every object recognition event** it summarizes the detections into an
+`ImageAnnotation` — scene, scene description and a count per object label —
+and appends it to the scenario's history *only if it differs* from the
+previous one. The history keeps at most `history_size` annotations; the
+oldest drops off.
+
+Because a VLM varies in wording and counts between images of the same view,
+annotations are compared leniently:
+
+- Labels are grouped into categories (`labels.py`, `CATEGORIES`), so *man*,
+  *woman* and *child* all count as *person*, *mug* as *cup*, *couch* as *sofa*,
+  and so on. Extend that table as needed; unlisted labels are their own
+  category.
+- Counts that differ by at most `count_threshold` are considered equal.
+- The scene description is never compared, since it is phrased differently
+  every time.
+- An object that reappears with a count seen earlier in the history is not
+  reported as new.
+
+**On every utterance** it calls `VisualResponderImpl.respond()`
+(`visualresponder.py`), which answers only if the utterance contains one of
+the configured cues as whole words (case-insensitive, apostrophes ignored, so
+*what's*, *what’s* and *whats* match alike):
+
+| Cue type | Default cues | Answer |
+|---|---|---|
+| `see_cues` | look, what do you see, what can you see, … | The scene (*"This looks like a street."*), then either the scene description if nothing changed, or the object counts (*"I see 3 people, a car."*) |
+| `change_cues` | what changed, what's new, anything different, differences, … | Scene change, objects that appeared and disappeared (*"Now I also see a dog. I no longer see a bicycle."*) — each change is reported once; asking again gives *"Nothing has changed since I last told you"* |
+
+Change cues are checked first. If no image has been seen yet in the scenario
+the reply is *"I don't see anything"*. Any other utterance is ignored, so the
+responder can run alongside a general dialogue component on the same input
+topic. Replies are published as agent `TextSignalEvent`s on `topic_output`,
+with `source=event` so tenant and scenario ids carry over from the question.
+
+## Configuration
+
+`config/default.config` holds the standalone defaults; `config/custom.config`
+overrides them for a real deployment. The relevant sections:
+
+```ini
+[cltl.event.kombu]
+server: $CLTL_AMQP_URL            # broker of the deployment
+exchange: cltl.combot
+compression: bzip2
+tenant: $CLTL_TENANT              # empty = listen to all tenants
+
+[cltl.backend]
+storage_url: $CLTL_STORAGE_URL    # where cltl-storage:image/<id> resolves, keep the trailing slash
+server_image_url: http://127.0.0.1:8000/host
+
+[cltl.object_recognition]
+implementation: llama_cpp         # llama_cpp | ollama | proxy
+
+[cltl.object_recognition.llama_cpp]
+model: Qwen3VL-8B-Instruct        # only used as label, llama-server serves one model
+host: http://localhost:9009
+frequency_penalty: 0.3
+# api_key: ...                    # only if llama-server runs with --api-key
+
+[cltl.object_recognition.ollama]
+model: qwen2.5vl
+# host: https://ollama.com        # default: OLLAMA_HOST or local instance
+# api_key: ...                    # default: OLLAMA_API_KEY
+
+[cltl.object_recognition.proxy]
+start_infra: True                 # start the YOLOv5 container; False needs detector_url
+# detector_url: http://...
+
+[cltl.object_recognition.events]
+image_topic: cltl.topic.image
+object_topic: cltl.topic.object_recognition
+
+[cltl.visual-responder]
+text_input: cltl.topic.text_in
+object_input: cltl.topic.object_recognition
+topic_output: cltl.topic.vision_out
+count_threshold: 1                # count differences up to this are ignored
+history_size: 10                  # changed annotations kept per scenario (default 5)
+see_cues: look, what do you see, what can you see, what did you see, what have you seen
+change_cues: what changed, what has changed, what's changed, what is different, ...
+```
+
+`$VAR` values are expanded when read. An unset variable is passed on as the
+literal string (with only a warning), so a missing `CLTL_TENANT` makes the
+component bind a queue for a tenant literally named `$CLTL_TENANT`.
+
+## Running
+
+Requires Python ≥ 3.10.
 
 ```bash
 python3.10 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+```
 
-cp config/custom.config.example config/custom.config
-# edit config/custom.config: set CLTL_AMQP_URL / CLTL_TENANT / CLTL_STORAGE_URL
-# as instructed in the file's own header
+Start a detector backend (e.g. `llama-server` as above), make sure the
+deployment's broker and storage are reachable, then:
 
-CLTL_AMQP_URL=amqp://eliza:eliza123@127.0.0.1:5672/ CLTL_TENANT=tenant-a \
-    CLTL_STORAGE_URL=http://127.0.0.1:8001/storage/ \
+```bash
+CLTL_AMQP_URL=amqp://<user>:<password>@127.0.0.1:5672/ \
+CLTL_TENANT=tenant-a \
+CLTL_STORAGE_URL=http://127.0.0.1:8001/storage/ \
     python src/main.py
 ```
 
-### Container
+`main.py` composes `ObjectRecognitionContainer` and
+`VisualResponderContainer`, and serves a `/health` endpoint on port 8006.
+Opening and closing scenarios is not its job; that is done by the
+deployment's own `cltl-context`.
+
+With `[cltl.event] implementation: internal` (the `default.config` value) the
+components use an in-process event bus instead, useful for local testing.
+
+### Docker
 
 ```bash
-CLTL_TENANT=tenant-a docker compose -f compose/example.compose.yml up
+docker build -t cltl-object-recognition --build-context leolani=<path to leolani sdists> .
 ```
 
-See the header comment in `compose/example.compose.yml` for the full
-sequence, including which stacks must already be running.
+The image installs from an offline registry of first-party sdists (the
+`leolani` build context) and ships `config/`, so a deployment only needs to
+mount its own `custom.config`.
 
-## Two things that will confuse you first
+## Package layout
 
-**Every *typed* message gets two replies.** This module subscribes to the
-same topic `cltl-eliza` does and publishes to the same topic — so both
-answer. That is deliberate: a module on its own private topic would prove
-nothing about attaching to a *real* deployment. This module's reply is the
-one tagged `(via myorg.example)`.
-
-**An uploaded image gets one.** Submitting from the chat UI's Image panel
-publishes an image signal and *no* utterance, so `cltl-eliza` — which
-subscribes to `cltl.topic.text_in` and nothing else — never sees a picture.
-
-## Make it yours
-
-Rename `myorg`/`example` (`setup.py`, `src/myorg/`, `config/default.config`'s
-`[myorg.example]` section, `Dockerfile`'s image labels) to your own
-organisation and module. The namespace is `myorg`, deliberately **not**
-`cltl`: a third-party module is not part of the platform's distribution and
-must not squat in its package namespace.
+```
+src/
+├── main.py                          # application: composes both containers, /health
+└── cltl/
+    ├── object_recognition/
+    │   ├── api.py                   # Object, ObjectDetector, SCENE_TYPE, SCENE_DESCRIPTION_TYPE
+    │   ├── container.py             # picks the detector implementation from config
+    │   ├── service.py               # image topic → detector → object topic
+    │   ├── schema.py                # ObjectRecognitionEvent (EMISSOR mentions)
+    │   ├── llama_cpp.py             # VLM via llama-server
+    │   ├── ollama_proxy.py          # VLM via Ollama
+    │   └── proxy.py                 # YOLOv5 Docker service
+    └── visual_responder/
+        ├── api.py                   # ImageAnnotation (change detection), VisualResponder
+        ├── container.py
+        ├── service.py               # per-scenario history, text/object topics
+        ├── visualresponder.py       # cue matching and reply generation
+        ├── labels.py                # label → category table
+        └── framework/               # legacy Pepper robot code, not used
+```
 
 ## License
 
