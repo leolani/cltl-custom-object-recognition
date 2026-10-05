@@ -4,7 +4,8 @@ import logging
 import re
 from typing import List, Optional
 
-from cltl.visual_responder.api import VisualResponder, ImageAnnotation, DEFAULT_COUNT_THRESHOLD
+from cltl.situation_awareness.api import ImageAnnotation, DEFAULT_COUNT_THRESHOLD
+from cltl.visual_responder.api import VisualResponder
 
 logger = logging.getLogger(__name__)
 

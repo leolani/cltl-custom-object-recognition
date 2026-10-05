@@ -6,8 +6,9 @@ Two Leolani components that give a conversational agent eyes:
   object detector over them, and publishes the detected objects (label,
   bounding box, confidence) plus a scene label and a one-sentence scene
   description as an annotation event.
-- **`cltl.visual_responder`** — keeps a short per-scenario history of what was
-  seen, and answers questions such as *"what do you see?"* or *"what has
+- **`cltl.situation_awareness`** — keeps a short per-scenario history of the
+  scene and the objects that were seen, and what changed (`VisualHistory`).
+- **`cltl.visual_responder`** — reads that history and answers questions such as *"what do you see?"* or *"what has
   changed?"* in the chat.
 
 Both attach to a running Leolani deployment through the message bus. Nothing
@@ -25,10 +26,16 @@ in the platform needs to know they exist.
  │  ObjectDetector.detect() │                            │
  └────────────┬─────────────┘                            │
               │ cltl.topic.object_recognition            │
+              ▼                                          │
+ ┌──────────────────────────────┐                        │
+ │ SituationAwarenessService    │                        │
+ │  VisualHistory.add_event()   │                        │
+ └────────────┬─────────────────┘                        │
+              │ shared VisualHistory (in process)        │
               ▼                                          ▼
         ┌────────────────────────────────────────────────────┐
         │ VisualResponderService                              │
-        │   per scenario: history of changed ImageAnnotations │
+        │   history = VisualHistory.get(scenario)             │
         │   VisualResponderImpl.respond(utterance, history)   │
         └─────────────────────────┬──────────────────────────┘
                                   │ cltl.topic.vision_out  (agent reply)
@@ -97,19 +104,22 @@ python -m cltl.object_recognition.ollama_proxy data/Kyoto2011.JPG --model qwen2.
 
 ## Visual responder
 
-`VisualResponderService` (`src/cltl/visual_responder/service.py`) subscribes
-to both the object recognition topic and the text input topic.
+`SituationAwarenessService` (`src/cltl/situation_awareness/service.py`)
+subscribes to the object recognition topic, `VisualResponderService`
+(`src/cltl/visual_responder/service.py`) to the text input topic. Both share
+one `VisualHistory` (`src/cltl/situation_awareness/history.py`), provided by
+`SituationAwarenessContainer`, so other components can use it as well.
 
-**On every object recognition event** it summarizes the detections into an
+**On every object recognition event** the `VisualHistory` summarizes the detections into an
 `ImageAnnotation` — scene, scene description and a count per object label —
 and appends it to the scenario's history *only if it differs* from the
 previous one. The history keeps at most `history_size` annotations; the
 oldest drops off.
 
 Because a VLM varies in wording and counts between images of the same view,
-annotations are compared leniently:
+annotations are compared leniently (`src/cltl/situation_awareness/api.py`):
 
-- Labels are grouped into categories (`labels.py`, `CATEGORIES`), so *man*,
+- Labels are grouped into categories (`situation_awareness/labels.py`, `CATEGORIES`), so *man*,
   *woman* and *child* all count as *person*, *mug* as *cup*, *couch* as *sofa*,
   and so on. Extend that table as needed; unlisted labels are their own
   category.
@@ -134,6 +144,33 @@ the reply is *"I don't see anything"*. Any other utterance is ignored, so the
 responder can run alongside a general dialogue component on the same input
 topic. Replies are published as agent `TextSignalEvent`s on `topic_output`,
 with `source=event` so tenant and scenario ids carry over from the question.
+
+## Scenes in the knowledge graph
+
+If `kg_address` is set in `[cltl.situation-awareness]`, `SceneKnowledgeGraph`
+(`src/cltl/situation_awareness/knowledge_graph.py`) pushes the scenes seen
+during an interaction to the knowledge graph through `cltl.brain`'s
+`LongTermMemory.capsule_event`, like the event details in cltl-custom-diabetes.
+The capsules are built by `situation_capsule.py`:
+
+- Each scene type is a unique scene in the interaction (scenario), e.g.
+  `leolaniWorld:office_<scenario id>`, with a `sem:hasActor` triple for each
+  object seen in it.
+- The capsule is an experience of the `source` sensor: a `visual` event for the
+  scenario with a `detection` per image.
+- A scene is pushed the first time it is seen in the interaction. After that it
+  is pushed again only if the similarity of its objects to the objects last
+  pushed for that scene is below `similarity_threshold`. Similarity is the
+  weighted Jaccard of the object counts per category. Images without objects
+  are not pushed. This keeps the knowledge graph from filling up with the same
+  scene.
+- `similarity_threshold` (0 to 1) regulates how many changes are recorded:
+  `0.0` pushes each scene type only once per interaction, `1.0` pushes every
+  change in the objects of a scene, and values in between push only changes of
+  at least that degree. Every image is checked against it, independent of
+  `count_threshold`, which only applies to the visual history.
+- If `place` is set, the context of each interaction is pushed once with
+  `capsule_context`.
 
 ## Configuration
 
@@ -173,12 +210,19 @@ start_infra: True                 # start the YOLOv5 container; False needs dete
 image_topic: cltl.topic.image
 object_topic: cltl.topic.object_recognition
 
-[cltl.visual-responder]
-text_input: cltl.topic.text_in
+[cltl.situation-awareness]
 object_input: cltl.topic.object_recognition
-topic_output: cltl.topic.vision_out
 count_threshold: 1                # count differences up to this are ignored
 history_size: 10                  # changed annotations kept per scenario (default 5)
+kg_address: $CLTL_KG_ADDRESS      # GraphDB repository, scenes are not pushed if unset
+kg_log_dir: kg_logs
+similarity_threshold: 0.6         # 0 = each scene once, 1 = every change (default 0.6)
+source: front-camera
+# place: ...                      # with country, region, city: push the interaction context
+
+[cltl.visual-responder]
+text_input: cltl.topic.text_in
+topic_output: cltl.topic.vision_out
 see_cues: look, what do you see, what can you see, what did you see, what have you seen
 change_cues: what changed, what has changed, what's changed, what is different, ...
 ```
@@ -200,7 +244,7 @@ Start a detector backend (e.g. `llama-server` as above), make sure the
 deployment's broker and storage are reachable, then:
 
 ```bash
-CLTL_AMQP_URL=amqp://<user>:<password>@127.0.0.1:5672/ \
+CLTL_AMQP_URL='amqp://eliza:eliza123@127.0.0.1:5672/' \
 CLTL_TENANT=tenant-a \
 CLTL_STORAGE_URL=http://127.0.0.1:8001/storage/ \
     python src/main.py
@@ -238,12 +282,19 @@ src/
     │   ├── llama_cpp.py             # VLM via llama-server
     │   ├── ollama_proxy.py          # VLM via Ollama
     │   └── proxy.py                 # YOLOv5 Docker service
+    ├── situation_awareness/
+    │   ├── api.py                   # ImageAnnotation (change detection)
+    │   ├── history.py               # VisualHistory: per-scenario history of changed annotations
+    │   ├── knowledge_graph.py       # SceneKnowledgeGraph: pushes changed scenes to the knowledge graph
+    │   ├── situation_capsule.py     # capsules for cltl.brain
+    │   ├── service.py               # object topic → VisualHistory → knowledge graph
+    │   ├── container.py             # visual_history singleton, shared by components
+    │   └── labels.py                # label → category table
     └── visual_responder/
-        ├── api.py                   # ImageAnnotation (change detection), VisualResponder
+        ├── api.py                   # VisualResponder
         ├── container.py
-        ├── service.py               # per-scenario history, text/object topics
+        ├── service.py               # text topic → reply from the VisualHistory
         ├── visualresponder.py       # cue matching and reply generation
-        ├── labels.py                # label → category table
         └── framework/               # legacy Pepper robot code, not used
 ```
 

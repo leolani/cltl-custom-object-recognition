@@ -8,6 +8,7 @@ from cltl.combot.infra.di_container import singleton
 from cltl.combot.infra.event.api import Event, PAYLOAD
 from cltl.combot.infra.event.memory import SynchronousEventBus
 from cltl.object_recognition.container import ObjectRecognitionContainer
+from cltl.situation_awareness.container import SituationAwarenessContainer
 from cltl.visual_responder.container import VisualResponderContainer
 from emissor.representation.util import marshal, unmarshal, register_type_var
 from flask import Flask
@@ -41,8 +42,10 @@ def deserializer(obj):
 class ApplicationContainer(
                            ObjectRecognitionContainer,
                            VisualResponderContainer,
-                           #FaceRecognitionContainer,
-                           #VectorIdContainer
+                           # Keeps track of the scenes seen in an interaction and pushes them to the
+                           # knowledge graph. Listed after VisualResponderContainer, which uses it, so
+                           # it is started before and stopped after the visual responder.
+                           SituationAwarenessContainer,
                            ):
     """This deployment: just the component. Scenario creation is not this
     template's job — it is the platform's own cltl-context, one per tenant,
