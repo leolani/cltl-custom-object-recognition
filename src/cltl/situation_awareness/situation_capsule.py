@@ -6,6 +6,7 @@ from cltl.commons.discrete import UtteranceType
 WORLD_NAMESPACE = "http://cltl.nl/leolani/world/"
 INPUTS_NAMESPACE = "http://cltl.nl/leolani/inputs/"
 SEM_HAS_ACTOR = "http://semanticweb.cs.vu.nl/2009/11/sem/hasActor"
+SEM_HAS_TIME = "http://semanticweb.cs.vu.nl/2009/11/sem/hasTime"
 
 
 def _to_uri_part(label: str) -> str:
@@ -60,9 +61,13 @@ def get_capsule_from_scene(scene: str, scene_id: str, objects: Iterable[str], im
     }
     event_details = []
     subject = {"label": scene, "type": ["situation"], "uri": WORLD_NAMESPACE + scene_id}
-    predicate = {"label": "hasActor", "uri": SEM_HAS_ACTOR}
+    time = capsule["timestamp"].isoformat(timespec="minutes")
+    predicate = {"label": "hasTime", "uri": SEM_HAS_TIME}
+    object = {"label": time, "type": ["date"], "uri": WORLD_NAMESPACE + time.replace(":", "-")}
+    event_details.append({"subject": subject, "predicate": predicate, "object": object})
     for label in objects:
         object = {"label": label, "type": ["object"], "uri": WORLD_NAMESPACE + _to_uri_part(label)}
+        predicate = {"label": "hasActor", "uri": SEM_HAS_ACTOR}
         triple = {"subject": subject, "predicate": predicate, "object": object}
         event_details.append(triple)
 
