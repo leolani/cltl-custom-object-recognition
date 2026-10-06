@@ -15,6 +15,7 @@ class VisualResponderImpl(VisualResponder):
     # Can be configured with see_cues in [cltl.visual-responder].
     SEE_OBJECT = [
         "look",
+        "tell me what did you see",
         "what do you see",
         "what can you see",
         "what did you see",
