@@ -14,3 +14,4 @@ requests
 kombu
 Pillow>=10
 opencv-python>=4.8
+matplotlib
